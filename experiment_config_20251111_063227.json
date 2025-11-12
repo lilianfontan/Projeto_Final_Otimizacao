@@ -1,0 +1,136 @@
+{
+  "synthetic": {
+    "n_assets": 100,
+    "k_max": 15,
+    "min_return": 0.0005,
+    "epsilon": 0.01,
+    "delta": 0.5,
+    "n_runs": 10,
+    "seed": 42
+  },
+  "real_markets": [
+    {
+      "name": "sp500",
+      "n_assets": 30,
+      "k_max": 10,
+      "min_return": 0.0003
+    },
+    {
+      "name": "ibovespa",
+      "n_assets": 20,
+      "k_max": 8,
+      "min_return": 0.0003
+    }
+  ],
+  "n_runs_real": 5,
+  "strategies": [
+    {
+      "name": "idID_only",
+      "use_idID": true,
+      "use_TID": false,
+      "tabu_min": 10,
+      "tabu_max": 25,
+      "max_iter": 500,
+      "K": 20,
+      "H": 1,
+      "step_size": 0.3,
+      "step_variation": 0.3
+    },
+    {
+      "name": "TID_only",
+      "use_idID": false,
+      "use_TID": true,
+      "tabu_min": 10,
+      "tabu_max": 25,
+      "max_iter": 500,
+      "K": 20,
+      "H": 1,
+      "step_size": 0.3,
+      "step_variation": 0.3
+    },
+    {
+      "name": "idID_TID",
+      "use_idID": true,
+      "use_TID": true,
+      "tabu_min": 10,
+      "tabu_max": 25,
+      "max_iter": 500,
+      "K": 20,
+      "H": 1,
+      "step_size": 0.3,
+      "step_variation": 0.3
+    },
+    {
+      "name": "idID_TID_short_tabu",
+      "use_idID": true,
+      "use_TID": true,
+      "tabu_min": 5,
+      "tabu_max": 15,
+      "max_iter": 500,
+      "K": 20,
+      "H": 1,
+      "step_size": 0.3,
+      "step_variation": 0.3
+    },
+    {
+      "name": "idID_TID_long_tabu",
+      "use_idID": true,
+      "use_TID": true,
+      "tabu_min": 15,
+      "tabu_max": 35,
+      "max_iter": 500,
+      "K": 20,
+      "H": 1,
+      "step_size": 0.3,
+      "step_variation": 0.3
+    },
+    {
+      "name": "idID_TID_aggressive_penalty",
+      "use_idID": true,
+      "use_TID": true,
+      "tabu_min": 10,
+      "tabu_max": 25,
+      "max_iter": 500,
+      "K": 10,
+      "H": 1,
+      "step_size": 0.3,
+      "step_variation": 0.3
+    },
+    {
+      "name": "idID_TID_conservative_penalty",
+      "use_idID": true,
+      "use_TID": true,
+      "tabu_min": 10,
+      "tabu_max": 25,
+      "max_iter": 500,
+      "K": 30,
+      "H": 3,
+      "step_size": 0.3,
+      "step_variation": 0.3
+    },
+    {
+      "name": "idID_TID_large_step",
+      "use_idID": true,
+      "use_TID": true,
+      "tabu_min": 10,
+      "tabu_max": 25,
+      "max_iter": 500,
+      "K": 20,
+      "H": 1,
+      "step_size": 0.5,
+      "step_variation": 0.3
+    },
+    {
+      "name": "idID_TID_small_step",
+      "use_idID": true,
+      "use_TID": true,
+      "tabu_min": 10,
+      "tabu_max": 25,
+      "max_iter": 500,
+      "K": 20,
+      "H": 1,
+      "step_size": 0.15,
+      "step_variation": 0.15
+    }
+  ]
+}
