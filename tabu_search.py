@@ -645,9 +645,11 @@ class TabuSearch:
         op, base_step = self.token_ring_sequence[phase]
         return op, base_step
 
-    def _maybe_sample_neighbors(self, neighbors: List[Tuple]) -> List[Tuple]:
-        """Amostra estocasticamente a vizinhança caso neighbor_sample_ratio < 1.0."""
-        return neighbors
+    def _maybe_sample_neighbors(self, neighbors):
+        if self.neighbor_sample_ratio >= 1.0:
+            return neighbors
+        return random.sample(neighbors, int(len(neighbors)*self.neighbor_sample_ratio))
+
 
     # ==================== LOOP PRINCIPAL ====================
 
