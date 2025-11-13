@@ -27,6 +27,13 @@ class Solution:
     x: np.ndarray          # pesos do portfólio (somam 1)
     cost: float            # custo = variância + penalidades
 
+    def copy(self):
+        return Solution(
+            z=self.z.copy(),
+            x=self.x.copy(),
+            cost=float(self.cost)
+        )
+
 
 class TabuList:
     """Lista Tabu com memória de curto prazo (tenure variável)"""
@@ -250,175 +257,297 @@ class TabuSearch:
     # ==================== OPERADORES DE VIZINHANÇA ====================
 
     def generate_neighbors_idID(self, solution: Solution, step: Optional[float] = None) -> List[Tuple]:
-        """Operador idID (increase, decrease, insert, delete)."""
+        """
+        Operador idID — Increase, Decrease, Insert, Delete.
+        Agora com filtro para remover vizinhos redundantes
+        (i.e., aqueles cujo vetor x não muda de fato).
+        """
         neighbors: List[Tuple] = []
-        step_candidates = [0.01, 0.05, 0.1, 0.2]  # vários tamanhos de movimento
+
+        # Pequenos movimentos em diferentes intensidades
+        step_candidates = [0.01, 0.05, 0.1, 0.2]
+
+        # Função local para testar se o vizinho é igual ao original
+        def changed(orig: Solution, new: Solution) -> bool:
+            if new is None:
+                return False
+            return not np.allclose(orig.x, new.x, atol=1e-12)
+
+        # --------------------------------------------------------
+        # 1) Increase e Decrease para ativos já selecionados
+        # --------------------------------------------------------
+        selected_assets = np.where(solution.z == 1)[0]
 
         for s in step_candidates:
-            for i in range(self.n_assets):
-                if solution.z[i] == 1:
-                    n_inc = self._increase_asset(solution, i, s)
-                    if n_inc is not None:
-                        neighbors.append(('increase', i, -1, n_inc))
-                    n_dec = self._decrease_asset(solution, i, s)
-                    if n_dec is not None:
-                        neighbors.append(('decrease', i, -1, n_dec))
+            for i in selected_assets:
 
-            if int(solution.z.sum()) < self.k_max:
-                for i in range(self.n_assets):
-                    if solution.z[i] == 0:
-                        n_ins = self._insert_asset(solution, i)
-                        if n_ins is not None:
-                            neighbors.append(('insert', i, -1, n_ins))
+                # Increase
+                n_inc = self._increase_asset(solution, i, s)
+                if changed(solution, n_inc):
+                    neighbors.append(('increase', i, -1, n_inc))
+
+                # Decrease
+                n_dec = self._decrease_asset(solution, i, s)
+                if changed(solution, n_dec):
+                    neighbors.append(('decrease', i, -1, n_dec))
+
+        # --------------------------------------------------------
+        # 2) Insert — adicionar ativos que ainda não estão no portfólio
+        # --------------------------------------------------------
+        if int(solution.z.sum()) < self.k_max:
+            non_selected = np.where(solution.z == 0)[0]
+
+            for i in non_selected:
+                n_ins = self._insert_asset(solution, i)
+                if changed(solution, n_ins):
+                    neighbors.append(('insert', i, -1, n_ins))
 
         return neighbors
 
     def _increase_asset(self, solution: Solution, asset_idx: int, step: float) -> Optional[Solution]:
-        new_solution = deepcopy(solution)
-        new_x_i = new_solution.x[asset_idx] * (1.0 + step)
-        new_x_i = min(new_x_i, self.delta)
+        sol = Solution.copy(solution)
+        inc = sol.x[asset_idx] * step
 
-        delta_x = new_x_i - new_solution.x[asset_idx]
-        if delta_x <= 0:
+        if inc <= 0:
             return None
 
-        new_solution.x[asset_idx] = new_x_i
-        self._rebalance_portfolio(new_solution, exclude_idx=asset_idx, delta=-delta_x)
-        new_solution.cost = self.calculate_cost(new_solution)
-        return new_solution
+        # Limite máximo
+        inc = min(inc, self.delta - sol.x[asset_idx])
+        if inc <= 0:
+            return None
+
+        # Aplica aumento
+        sol.x[asset_idx] += inc
+
+        # distribui a retirada de forma suave
+        active = np.where((sol.z == 1) & (np.arange(self.n_assets) != asset_idx))[0]
+        if len(active) == 0:
+            return None
+
+        take_each = inc / len(active)
+        for j in active:
+            sol.x[j] = max(sol.x[j] - take_each, self.epsilon)
+
+        sol.x = sol.x / sol.x.sum()
+        sol.cost = self.calculate_cost(sol)
+        return sol
+
 
     def _decrease_asset(self, solution: Solution, asset_idx: int, step: float) -> Optional[Solution]:
-        new_solution = deepcopy(solution)
-        new_x_i = new_solution.x[asset_idx] * (1.0 - step)
+        sol = Solution.copy(solution)
+        dec = sol.x[asset_idx] * step
 
-        if new_x_i < self.epsilon:
+        if dec <= 0:
+            return None
+
+        # Caso vire muito pequeno → delete
+        if sol.x[asset_idx] - dec < self.epsilon:
             return self._delete_asset(solution, asset_idx)
 
-        delta_x = new_solution.x[asset_idx] - new_x_i
-        new_solution.x[asset_idx] = new_x_i
-        self._rebalance_portfolio(new_solution, exclude_idx=asset_idx, delta=delta_x)
-        new_solution.cost = self.calculate_cost(new_solution)
-        return new_solution
+        sol.x[asset_idx] -= dec
+
+        # redistribuição suave
+        active = np.where((sol.z == 1) & (np.arange(self.n_assets) != asset_idx))[0]
+        if len(active) == 0:
+            return None
+
+        give_each = dec / len(active)
+        for j in active:
+            sol.x[j] = min(sol.x[j] + give_each, self.delta)
+
+        sol.x = sol.x / sol.x.sum()
+        sol.cost = self.calculate_cost(sol)
+        return sol
+
 
     def _insert_asset(self, solution: Solution, asset_idx: int) -> Optional[Solution]:
         if int(solution.z.sum()) >= self.k_max:
             return None
 
-        new_solution = deepcopy(solution)
-        new_solution.z[asset_idx] = 1
-        add = max(self.epsilon, 1e-9)
-        new_solution.x[asset_idx] = add
-        self._rebalance_portfolio(new_solution, exclude_idx=asset_idx, delta=-add)
-        # renormaliza
-        s = new_solution.x.sum()
-        if s > 0:
-            new_solution.x = new_solution.x / s
-        new_solution.cost = self.calculate_cost(new_solution)
-        return new_solution
+        sol = Solution.copy(solution)
+
+        # Insere com peso mínimo seguro
+        add = max(self.epsilon, 0.005)  # peso inicial suave
+        sol.z[asset_idx] = 1
+        sol.x[asset_idx] = add
+
+        # tira proporcionalmente dos demais
+        active = np.where((sol.z == 1) & (np.arange(self.n_assets) != asset_idx))[0]
+        if len(active) == 0:
+            return None
+
+        take_each = add / len(active)
+        for j in active:
+            sol.x[j] = max(sol.x[j] - take_each, self.epsilon)
+
+        sol.x = sol.x / sol.x.sum()
+        sol.cost = self.calculate_cost(sol)
+        return sol
 
     def _delete_asset(self, solution: Solution, asset_idx: int) -> Solution:
-        new_solution = deepcopy(solution)
-        freed = new_solution.x[asset_idx]
-        new_solution.z[asset_idx] = 0
-        new_solution.x[asset_idx] = 0.0
-        self._rebalance_portfolio(new_solution, exclude_idx=asset_idx, delta=freed)
-        # renormaliza
-        s = new_solution.x.sum()
-        if s > 0:
-            new_solution.x = new_solution.x / s
-        new_solution.cost = self.calculate_cost(new_solution)
-        return new_solution
+        sol = Solution.copy(solution)
+        freed = sol.x[asset_idx]
+
+        sol.z[asset_idx] = 0
+        sol.x[asset_idx] = 0.0
+
+        # redistribui suavemente entre ativos ativos
+        active = np.where(sol.z == 1)[0]
+        if len(active) > 0:
+            give_each = freed / len(active)
+            for j in active:
+                sol.x[j] = min(sol.x[j] + give_each, self.delta)
+
+        sol.x = sol.x / sol.x.sum()
+        sol.cost = self.calculate_cost(sol)
+        return sol
+
+
+
 
     def _rebalance_portfolio(self, solution: Solution, exclude_idx: int, delta: float) -> None:
         """
-        Redistribui 'delta' entre os ativos presentes (z=1) exceto 'exclude_idx',
-        preservando limites [ε, δ]. Se não houver espaço proporcional, usa divisão uniforme.
+        Rebanceamento proporcional ideal:
+        - preserva ao máximo o movimento no asset 'exclude_idx'
+        - redistribui delta proporcionalmente entre ativos ativos
+        - respeita [epsilon, delta]
+        - mantém soma 1 sem destruir o movimento
         """
-        active = np.where((solution.z == 1) & (np.arange(self.n_assets) != exclude_idx))[0]
+
+        z = solution.z
+        x = solution.x
+        n = self.n_assets
+
+        # ------------------------------------------------------------
+        # 1. Lista de ativos ativos, exceto o que sofreu a alteração
+        # ------------------------------------------------------------
+        active = np.where((z == 1) & (np.arange(n) != exclude_idx))[0]
         if len(active) == 0:
+            # Nada a fazer
+            x[:] = x / x.sum()
             return
 
-        adjustable = np.array([max(solution.x[i] - self.epsilon, 0.0) for i in active])
-        total_adjustable = float(adjustable.sum())
-
+        # ------------------------------------------------------------
+        # 2. Caso delta < 0 → precisamos retirar peso dos ativos
+        # ------------------------------------------------------------
         if delta < 0:
-            # precisamos tirar dos ativos (redução)
-            take = -delta
-            if total_adjustable > 0:
-                for idx, i in enumerate(active):
-                    w = adjustable[idx] / total_adjustable
-                    solution.x[i] -= take * w
-                    solution.x[i] = float(np.clip(solution.x[i], 0.0, self.delta))
-            else:
-                # sem espaço proporcional -> dividir uniforme
-                for i in active:
-                    solution.x[i] -= take / len(active)
-                    solution.x[i] = float(np.clip(solution.x[i], 0.0, self.delta))
-        else:
-            # precisamos adicionar aos ativos
-            room = np.array([max(self.delta - solution.x[i], 0.0) for i in active])
-            total_room = float(room.sum())
-            if total_room > 0:
-                for idx, i in enumerate(active):
-                    w = room[idx] / total_room if total_room > 0 else 1.0 / len(active)
-                    solution.x[i] += delta * w
-                    solution.x[i] = float(np.clip(solution.x[i], 0.0, self.delta))
-            else:
-                for i in active:
-                    solution.x[i] += delta / len(active)
-                    solution.x[i] = float(np.clip(solution.x[i], 0.0, self.delta))
+            remove = -delta
 
-        # garante não-negatividade e limites
-        solution.x = np.clip(solution.x, 0.0, self.delta)
+            # capacidade de reduzir: (x_i − ε)
+            capacities = np.maximum(x[active] - self.epsilon, 0.0)
+            tot_cap = capacities.sum()
+
+            if tot_cap > 1e-12:
+                # redistribuição proporcional
+                for i, cap in zip(active, capacities):
+                    if cap <= 0:
+                        continue
+                    frac = cap / tot_cap
+                    x[i] -= remove * frac
+            else:
+                # ninguém pode ceder proporcionalmente → reduzir uniforme
+                per = remove / len(active)
+                for i in active:
+                    x[i] = max(self.epsilon, x[i] - per)
+
+        # ------------------------------------------------------------
+        # 3. Caso delta > 0 → precisamos adicionar peso aos ativos
+        # ------------------------------------------------------------
+        else:
+            add = delta
+
+            # capacidade de aumentar: (δ − x_i)
+            capacities = np.maximum(self.delta - x[active], 0.0)
+            tot_cap = capacities.sum()
+
+            if tot_cap > 1e-12:
+                for i, cap in zip(active, capacities):
+                    if cap <= 0:
+                        continue
+                    frac = cap / tot_cap
+                    x[i] += add * frac
+            else:
+                # ninguém pode receber proporcionalmente → distribuir uniforme
+                per = add / len(active)
+                for i in active:
+                    x[i] = min(self.delta, x[i] + per)
+
+        # ------------------------------------------------------------
+        # 4. Clip final: respeitar limites exatamente
+        # ------------------------------------------------------------
+        x[active] = np.clip(x[active], self.epsilon, self.delta)
+        x[exclude_idx] = np.clip(x[exclude_idx], 0.0, self.delta)
+
+        # ------------------------------------------------------------
+        # 5. Normalização SUAVE preservando a direção do movimento
+        # ------------------------------------------------------------
+        s = x.sum()
+        if abs(s - 1.0) > 1e-12:
+            x[:] = x / s
+
 
     def generate_neighbors_TID(self, solution: Solution, step: Optional[float] = None) -> List[Tuple]:
-        """Operador TID (transfer, insert, delete via transferência)."""
+        """
+        Operador TID (Transfer, Insert, Delete via transferência).
+        Agora com filtro para remover vizinhos que não alteram
+        efetivamente o vetor x.
+        """
         neighbors: List[Tuple] = []
+
+        # Passos usados nos operadores
         step_candidates = [0.01, 0.05, 0.1, 0.2]
 
+        # Função local para detectar se solução mudou
+        def changed(orig: Solution, new: Solution) -> bool:
+            if new is None:
+                return False
+            return not np.allclose(orig.x, new.x, atol=1e-12)
+
+        selected_assets = np.where(solution.z == 1)[0]
+
+        # --------------------------------------------------------
+        # Transferências entre ativos selecionados
+        # --------------------------------------------------------
         for s in step_candidates:
-            for i in range(self.n_assets):
-                if solution.z[i] == 0:
-                    continue
+            for i in selected_assets:
                 for j in range(self.n_assets):
                     if i == j:
                         continue
-                    n = self._transfer_between_assets(solution, i, j, s)
-                    if n is not None:
-                        neighbors.append(('transfer', i, j, n))
+
+                    n_trans = self._transfer_between_assets(solution, i, j, s)
+
+                    if changed(solution, n_trans):
+                        neighbors.append(('transfer', i, j, n_trans))
+
         return neighbors
 
 
+
     def _transfer_between_assets(self, solution: Solution, from_idx: int, to_idx: int, step: float) -> Optional[Solution]:
-        new_solution = deepcopy(solution)
-
-        transfer = new_solution.x[from_idx] * step
-        new_from = new_solution.x[from_idx] - transfer
-
-        if new_from < self.epsilon:
-            transfer = new_solution.x[from_idx]
-            new_solution.x[from_idx] = 0.0
-            new_solution.z[from_idx] = 0
-        else:
-            new_solution.x[from_idx] = new_from
-
-        if new_solution.z[to_idx] == 0:
-            if int(new_solution.z.sum()) >= self.k_max:
-                return None
-            new_solution.z[to_idx] = 1
-            if transfer < self.epsilon:
-                transfer = self.epsilon
-
-        new_to = new_solution.x[to_idx] + transfer
-        new_solution.x[to_idx] = min(new_to, self.delta)
-
-        # renormaliza pesos para somar 1
-        s = new_solution.x.sum()
-        if s <= 0:
+        if from_idx == to_idx:
             return None
-        new_solution.x = new_solution.x / s
+
+        new_solution = solution.copy()
+        x = new_solution.x
+
+        # quanto posso tirar de 'from'
+        delta = min(step, x[from_idx] - self.epsilon)
+        # quanto posso colocar em 'to'
+        delta = min(delta, self.delta - x[to_idx])
+
+        if delta <= 0:
+            return None
+
+        # movo delta de from → to
+        x[from_idx] -= delta
+        x[to_idx] += delta
+
+        # rebalance preservando o movimento (excluo to_idx)
+        self._rebalance_portfolio(new_solution, exclude_idx=to_idx, delta=0.0)
+
         new_solution.cost = self.calculate_cost(new_solution)
         return new_solution
+
 
     def generate_all_neighbors(
         self,
@@ -458,6 +587,13 @@ class TabuSearch:
         if use_TID:
             step = step_override if step_override is not None else None
             all_neighbors.extend(self.generate_neighbors_TID(solution, step))
+
+        unique = {}
+        for mv, i, j, sol in all_neighbors:
+            key = tuple(np.round(sol.x, 8))  # hashing suave de precisão
+            if key not in unique:
+                unique[key] = (mv, i, j, sol)
+        all_neighbors = list(unique.values())
 
         return self._maybe_sample_neighbors(all_neighbors)
 

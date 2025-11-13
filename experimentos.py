@@ -74,7 +74,7 @@ def executar_experimento(strategy_name, config, seed=42, verbose=True):
             Se True, imprime logs detalhados
     """
 
-    np.random.seed(seed)
+    #np.random.seed(seed)
 
     # ------------------------------------------------------------
     # 1. Carregar dados via PortfolioDataLoader
